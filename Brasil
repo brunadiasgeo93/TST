@@ -1,0 +1,214 @@
+// === 1. Importar a coleção de regiões ===
+var regioes = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_Regioes_2024');
+
+// === 2. Visualizar os nomes existentes na coluna NM_REGIA ===
+print('Regiões disponíveis:', regioes.aggregate_array('NM_REGIA').distinct());
+
+// === 3. Datas das estações ===
+var dataVeraoInicio = '2024-12-21';
+var dataVeraoFim = '2025-03-21';
+var dataInvernoInicio = '2024-06-21';
+var dataInvernoFim = '2024-09-22';
+
+// === 4. Função para processar LST ===
+function processaST(image) {
+  var qa = image.select('QA_PIXEL');
+  var semNuvem = qa.bitwiseAnd(1 << 3).eq(0);
+  var semSombra = qa.bitwiseAnd(1 << 4).eq(0);
+  var mascara = semNuvem.and(semSombra);
+
+  var imageMascarada = image.updateMask(mascara);
+
+  var lstCelsius = imageMascarada.select('ST_B10')
+    .multiply(0.00341802)
+    .add(149.0)
+    .subtract(273.15)
+    .rename('TST_C');
+
+  return lstCelsius;
+}
+
+// === 5. Coleções e médias ===
+var colecaoVerao = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+  .filterDate(dataVeraoInicio, dataVeraoFim)
+  .filter(ee.Filter.lt('CLOUD_COVER', 20))
+  .map(processaST);
+
+var colecaoInverno = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+  .filterDate(dataInvernoInicio, dataInvernoFim)
+  .filter(ee.Filter.lt('CLOUD_COVER', 20))
+  .map(processaST);
+
+var mediaTSTVerao = colecaoVerao.mean().rename('TST_C');
+var mediaTSTInverno = colecaoInverno.mean().rename('TST_C');
+
+// === 6. Parâmetros de visualização ===
+var visParams = {
+  min: 15,
+  max: 50,
+  palette: [
+    '#081d58', '#225ea8', '#41b6c4', '#7fcdbb', '#c7e9b4',
+    '#ffffcc', '#fe9929', '#ec7014', '#cc4c02', '#800026'
+  ]
+};
+
+// === 7. Lista das regiões ===
+var nomesRegioes = ['Norte', 'Nordeste', 'Centro-oeste', 'Sudeste', 'Sul'];
+
+// === 8. Escolha da estação: 'inverno', 'verao' ou 'ambos' ===
+var estacaoSelecionada = 'inverno'; // Altere aqui conforme desejar
+
+// === NOVA FUNÇÃO: Dividir uma geometria em 4 quadrantes ===
+function dividirEmQuadrantes(geometria) {
+  // Pega o retângulo que envolve a geometria
+  var bounds = geometria.bounds();
+  // Obtém as coordenadas do retângulo
+  var coords = ee.List(bounds.coordinates().get(0));
+  
+  // Extrai as coordenadas mínimas e máximas
+  var xMin = ee.Number(ee.List(coords.get(0)).get(0));
+  var yMin = ee.Number(ee.List(coords.get(0)).get(1));
+  var xMax = ee.Number(ee.List(coords.get(2)).get(0));
+  var yMax = ee.Number(ee.List(coords.get(2)).get(1));
+
+  // Calcula o ponto central do retângulo
+  var lonCentro = xMin.add(xMax).divide(2);
+  var latCentro = yMin.add(yMax).divide(2);
+
+  // Define os quatro retângulos que formam os quadrantes
+  var quadranteSO = ee.Geometry.Rectangle([xMin, yMin, lonCentro, latCentro]);
+  var quadranteSE = ee.Geometry.Rectangle([lonCentro, yMin, xMax, latCentro]);
+  var quadranteNO = ee.Geometry.Rectangle([xMin, latCentro, lonCentro, yMax]);
+  var quadranteNE = ee.Geometry.Rectangle([lonCentro, latCentro, xMax, yMax]);
+  
+  // Intersecta os quadrantes com a geometria original para manter o formato correto
+  // O 'maxError' é um parâmetro para otimizar a operação
+  return {
+    'SO': quadranteSO.intersection({'right': geometria, 'maxError': 1}),
+    'SE': quadranteSE.intersection({'right': geometria, 'maxError': 1}),
+    'NO': quadranteNO.intersection({'right': geometria, 'maxError': 1}),
+    'NE': quadranteNE.intersection({'right': geometria, 'maxError': 1})
+  };
+}
+
+// === 9. Loop para adicionar layers e exportar conforme estação escolhida (AJUSTADO) ===
+nomesRegioes.forEach(function(nome) {
+  var regiao = regioes.filter(ee.Filter.eq('NM_REGIA', nome));
+
+  regiao.size().evaluate(function(tamanho) {
+    if (tamanho > 0) {
+      var geometria = regiao.geometry();
+      var proj = ee.Feature(regiao.first()).geometry().projection().getInfo();
+
+      // Função interna para processar e exportar para uma dada estação
+var processarExportacao = function(imagem, nomeEstacao, nomeRegiao, geometriaRegiao) {
+    var imgProj = imagem.setDefaultProjection(proj.crs, null, 100);
+    
+    // Adiciona a camada da região completa ao mapa
+    Map.addLayer(imgProj.clip(geometriaRegiao), visParams, 'TST ' + nomeEstacao + ' 2024 - ' + nomeRegiao);
+
+    // Verifica se a região é Norte ou Sudeste para dividir em quadrantes
+    if (nomeRegiao === 'Norte' || nomeRegiao === 'Sudeste') {
+      print('Dividindo a região ' + nomeRegiao + ' em quadrantes para exportação.');
+      var quadrantes = dividirEmQuadrantes(geometriaRegiao);
+      
+      // Itera sobre cada quadrante para exportar
+      for (var quadranteNome in quadrantes) {
+        var geometriaQuadrante = quadrantes[quadranteNome];
+        var nomeArquivo = 'TST_' + nomeEstacao + '_2024_' + nomeRegiao + '_' + quadranteNome + '_100m';
+        
+        Export.image.toDrive({
+          image: imgProj.clip(geometriaQuadrante),
+          description: nomeArquivo,
+          folder: 'GEE_exports',
+          fileNamePrefix: nomeArquivo,
+          region: geometriaQuadrante,
+          scale: 100, // Resolução ajustada para 100m
+          crs: proj.crs,
+          maxPixels: 1e13
+        });
+      }
+    } else {
+      // Para as outras regiões, exporta o arquivo único
+      var nomeArquivoUnico = 'TST_' + nomeEstacao + '_2024_' + nomeRegiao + '_100m';
+      Export.image.toDrive({
+        image: imgProj.clip(geometriaRegiao),
+        description: nomeArquivoUnico,
+        folder: 'GEE_exports',
+        fileNamePrefix: nomeArquivoUnico,
+        region: geometriaRegiao,
+        scale: 100, // Resolução ajustada para 100m
+        crs: proj.crs,
+        maxPixels: 1e13
+      });
+    }
+};
+
+      // Chama a função de processamento para as estações selecionadas
+      if (estacaoSelecionada === 'verao' || estacaoSelecionada === 'ambos') {
+        processarExportacao(mediaTSTVerao, 'Verao', nome, geometria);
+      }
+
+      if (estacaoSelecionada === 'inverno' || estacaoSelecionada === 'ambos') {
+        processarExportacao(mediaTSTInverno, 'Inverno', nome, geometria);
+      }
+
+    } else {
+      print('⚠️ Região não encontrada no asset:', nome);
+    }
+  });
+});
+
+
+// === 10. Centralizar o mapa no Brasil ===
+Map.centerObject(regioes, 4);
+
+// === 11. Função para criar legenda com intervalos fixos ===
+function adicionarLegendaIntervalos() {
+  var legend = ui.Panel({
+    style: {
+      position: 'bottom-left',
+      padding: '8px 15px',
+      backgroundColor: 'rgba(255, 255, 255, 0.8)',
+      maxWidth: '140px'
+    }
+  });
+
+  var legendTitle = ui.Label({
+    value: 'Temperatura Superfície (°C)',
+    style: {fontWeight: 'bold', fontSize: '16px', margin: '0 0 8px 0', padding: '0'}
+  });
+  legend.add(legendTitle);
+
+  var intervals = [
+    '< 20', '20–22', '22–24', '24–26', '26–28',
+    '28–30', '30–32', '32–35', '35–45', '> 45'
+  ];
+
+  var colors = [
+    '#081d58', '#225ea8', '#41b6c4', '#7fcdbb', '#c7e9b4',
+    '#ffffcc', '#fe9929', '#ec7014', '#cc4c02', '#800026'
+  ];
+
+  for (var i = 0; i < intervals.length; i++) {
+    var colorBox = ui.Label({
+      style: {
+        backgroundColor: colors[i],
+        padding: '8px', margin: '0 0 4px 0', width: '20px', height: '20px'
+      }
+    });
+    var label = ui.Label({
+      value: intervals[i], style: {margin: '0 0 4px 6px'}
+    });
+    var panelLinha = ui.Panel({
+      widgets: [colorBox, label], layout: ui.Panel.Layout.Flow('horizontal')
+    });
+    legend.add(panelLinha);
+  }
+  Map.add(legend);
+}
+
+// === 12. Chamada para exibir legenda com intervalos fixos ===
+adicionarLegendaIntervalos();
