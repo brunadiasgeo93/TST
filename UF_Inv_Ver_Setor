@@ -1,0 +1,179 @@
+// === 1. Sigla do Estado desejado ===  
+var siglaEstado = 'SE'; // Exemplo: 'SE' para Sergipe
+
+// === 2. Importar a malha de estados, municípios e setores censitários ===
+var estados = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_UF_2024');
+var setores = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/Setores_2022_Urbano');
+
+// === 3. Filtrar o estado e os setores correspondentes ===
+var estado = estados.filter(ee.Filter.eq('SIGLA_UF', siglaEstado));
+var setoresEstado = setores.filterBounds(estado);
+
+print('Total de setores urbanos no estado:', setoresEstado.size());
+
+// === 4. Datas para as estações ===
+var datasEstacoes = {
+  'Verao': {
+    inicio: '2024-12-20',
+    fim:    '2025-03-20'
+  },
+  'Inverno': {
+    inicio: '2024-06-21',
+    fim:    '2024-09-22'
+  }
+};
+
+// === 5. Tabela de controle de exportação por estação ===
+var controleExportacao = {
+  'Verao': {
+    exportarTabela: false,
+    exportarRaster: false
+  },
+  'Inverno': {
+    exportarTabela: true,
+    exportarRaster: false
+  }
+};
+
+// === 6. Parâmetros de visualização ===
+var visParams = {
+  min: 15,
+  max: 50,
+  palette: [
+    '#081d58', // < 20°C
+    '#225ea8', // 20–22
+    '#41b6c4', // 22–24
+    '#7fcdbb', // 24–26
+    '#c7e9b4', // 26–28
+    '#ffffcc', // 28–30
+    '#fe9929', // 30–32
+    '#ec7014', // 32–35
+    '#cc4c02', // 35–45
+    '#800026'  // > 45°C
+  ]
+};
+
+// === 7. Loop pelas estações ===
+Object.keys(datasEstacoes).forEach(function(nomeEstacao){
+  
+  var periodo = datasEstacoes[nomeEstacao];
+  var anoInicio = periodo.inicio.slice(0, 4);
+  var exportarTabela = controleExportacao[nomeEstacao].exportarTabela;
+  var exportarRaster = controleExportacao[nomeEstacao].exportarRaster;
+
+  var colecao = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+    .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+    .filterDate(periodo.inicio, periodo.fim)
+    .filterBounds(estado)
+    .filter(ee.Filter.lt('CLOUD_COVER', 20));
+  
+  // === 8. Máscara de nuvem e cálculo TST ===
+  colecao = colecao.map(function(image) {
+    var qa = image.select('QA_PIXEL');
+    var semNuvem = qa.bitwiseAnd(1 << 3).eq(0);
+    var semSombra = qa.bitwiseAnd(1 << 4).eq(0);
+    var mascara = semNuvem.and(semSombra);
+    var imageMascarada = image.updateMask(mascara);
+    var tstCelsius = imageMascarada.select('ST_B10')
+      .multiply(0.00341802)
+      .add(149.0)
+      .subtract(273.15)
+      .rename('TST_C');
+    return tstCelsius.clip(estado);
+  });
+  
+  // === 9. Média da TST para o estado ===
+  var mediaTST = colecao.mean();
+  var mediaPorSetor = mediaTST.reduceRegions({
+    collection: setoresEstado,
+    reducer: ee.Reducer.mean(),
+    scale: 30
+  }).map(function(feature) {
+    return feature.set('Estacao', nomeEstacao);
+  });
+
+  // === 10. Visualizar ===
+  Map.addLayer(mediaTST, visParams, 'TST_Media_' + nomeEstacao + '_' + siglaEstado);
+
+  var imagemVetorial = mediaPorSetor.reduceToImage({
+    properties: ['mean'],
+    reducer: ee.Reducer.first()
+  });
+  
+  Map.addLayer(imagemVetorial.visualize(visParams), {}, 'TST_Setores_' + nomeEstacao + '_' + siglaEstado);
+
+  // === 11. Exportações controladas ===
+  if (exportarTabela) {
+    Export.table.toDrive({
+      collection: mediaPorSetor,
+      description: 'TST_Media_Setores_' + siglaEstado + '_' + nomeEstacao + '_' + anoInicio,
+      folder: 'GEE_exports',
+      fileFormat: 'GeoJSON'
+    });
+  }
+
+  if (exportarRaster) {
+    Export.image.toDrive({
+      image: mediaTST,
+      description: 'TST_Media_Setores_Raster_' + siglaEstado + '_' + nomeEstacao + '_' + anoInicio,
+      folder: 'GEE_exports',
+      fileNamePrefix: 'TST_Media_Setores_Raster_' + siglaEstado + '_' + nomeEstacao + '_' + anoInicio,
+      region: estado.geometry(),
+      scale: 30,
+      maxPixels: 1e13
+    });
+  }
+
+  // === 12. Debug ===
+  colecao.size().evaluate(function(size){
+    print('Total de imagens no estado - ' + nomeEstacao + ':', size);
+  });
+
+});
+
+// === 13. Centralizar no estado ===
+Map.centerObject(estado, 7);
+Map.addLayer(estado.style({
+  color: 'black',
+  fillColor: '00000000',
+  width: 1
+}), {}, 'Estado');
+
+// === 14. Legenda ===
+function adicionarLegenda() {
+  var legenda = ui.Panel({style: {position: 'bottom-left', padding: '8px 15px'}});
+
+  var titulo = ui.Label({
+    value: 'Legenda (°C)',
+    style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 6px 0'}
+  });
+  legenda.add(titulo);
+
+  var cores = visParams.palette;
+  var labels = [
+    '< 20', 
+    '20–22', 
+    '22–24', 
+    '24–26', 
+    '26–28', 
+    '28–30', 
+    '30–32', 
+    '32–35', 
+    '35–45', 
+    '> 45'
+  ];
+
+  for (var i = 0; i < cores.length; i++) {
+    var linha = ui.Panel({layout: ui.Panel.Layout.Flow('horizontal')});
+    var cor = ui.Label({style: {backgroundColor: cores[i], padding: '8px', margin: '0 4px 4px 0'}});
+    var texto = ui.Label({value: labels[i], style: {margin: '0 0 4px 0'}});
+    linha.add(cor);
+    linha.add(texto);
+    legenda.add(linha);
+  }
+
+  Map.add(legenda);
+}
+
+// === 15. Adicionar legenda ===
+adicionarLegenda();
