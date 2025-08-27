@@ -3,8 +3,8 @@ var exportarRaster = false;   // Defina como true ou false
 var exportarGeoJSON = true;  // Defina como true ou false
 
 // === 1. Definir nome do município e da UF ===
-var nomeMunicipio = 'Salvador';
-var nomeUF = '';  // Deixe como '' se não quiser filtrar ou incluir no nome do arquivo
+var nomeMunicipio = 'Belém';
+var nomeUF = 'PA';  // Deixe como '' se não quiser filtrar ou incluir no nome do arquivo
 
 // === 2. Importar malhas de municípios e setores censitários ===
 var municipios = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_Municipios_2024');
@@ -162,8 +162,8 @@ function processaEexporta(nomeEstacao, datas) {
 }
 
 // === 9. Executar processamento e exportação para cada estação ===
-processaEexporta('Verao', datasEstacoes['Verao']);
-processaEexporta('Inverno', datasEstacoes['Inverno']);
+processaEexporta('Verao', datasEstacoes['Verao']); // ← Comente ou remova esta linha
+// processaEexporta('Inverno', datasEstacoes['Inverno']); // ← Comente ou remova esta linha
 
 // === 10. Centralizar mapa no município e adicionar camada de contorno ===
 Map.centerObject(municipio, 10);
