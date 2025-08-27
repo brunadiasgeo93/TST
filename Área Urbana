@@ -1,0 +1,116 @@
+// === 1. Importar assets dos polígonos urbanos e das regiões do Brasil ===
+var brUrbano = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/br_urbano_2022Polygon');
+var brRegioes = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_Regioes_2024');
+
+print('Total de áreas urbanas no Brasil:', brUrbano.size());
+print('Total de regiões do Brasil:', brRegioes.size());
+
+// ---
+// ## Processamento e cálculo das temperaturas
+// ---
+
+// === 2. Funções para processamento das coleções de imagens ===
+var calcularTST = function(periodo) {
+  var colecao = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+    .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+    .filterDate(periodo.inicio, periodo.fim)
+    .filter(ee.Filter.lt('CLOUD_COVER', 20));
+
+  colecao = colecao.map(function(image) {
+    var qa = image.select('QA_PIXEL');
+    var semNuvem = qa.bitwiseAnd(1 << 3).eq(0);
+    var semSombra = qa.bitwiseAnd(1 << 4).eq(0);
+    var mascara = semNuvem.and(semSombra);
+    var imageMascarada = image.updateMask(mascara);
+    var tstCelsius = imageMascarada.select('ST_B10')
+      .multiply(0.00341802)
+      .add(149.0)
+      .subtract(273.15)
+      .rename('TST_C');
+    return tstCelsius;
+  });
+  return colecao.mean();
+};
+
+// === 3. Cálculo das médias de temperatura para cada estação (em todo o Brasil) ===
+var mediaVerao = calcularTST({inicio: '2024-12-20', fim: '2025-03-20'});
+var mediaInverno = calcularTST({inicio: '2024-06-21', fim: '2024-09-22'});
+
+// ---
+// ## Junção de dados e exportação por região
+// ---
+
+// === 4. Define a função de exportação para uma região específica ===
+var exportarPorNomeRegiao = function(nomeRegiao) {
+  // Filtra a coleção de regiões para encontrar a geometria desejada
+  var regiaoFeature = brRegioes.filter(ee.Filter.eq('NM_REGIA', nomeRegiao)).first();
+  var geometriaRegiao = regiaoFeature.geometry();
+
+  // Filtra os polígonos urbanos que estão DENTRO da região atual
+  var urbanoRegiao = brUrbano.filterBounds(geometriaRegiao);
+
+  // Mapeia a coleção de feições urbanas para adicionar as propriedades de temperatura
+  var urbanoComTemperaturas = urbanoRegiao.map(function(feature) {
+    var mediaVeraoRegiao = mediaVerao.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: feature.geometry(),
+      scale: 100,
+      maxPixels: 1e13
+    }).get('TST_C');
+
+    var mediaInvernoRegiao = mediaInverno.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: feature.geometry(),
+      scale: 100,
+      maxPixels: 1e13
+    }).get('TST_C');
+    
+    // Trata valores nulos e converte para números
+    var tempVeraoNum = ee.Number(ee.Algorithms.If(mediaVeraoRegiao, mediaVeraoRegiao, 0));
+    var tempInvernoNum = ee.Number(ee.Algorithms.If(mediaInvernoRegiao, mediaInvernoRegiao, 0));
+    
+    // ---
+    // ** Nova Lógica: Define a amplitude como 0 se a temperatura for 0 **
+    // ---
+    var amplitude = ee.Algorithms.If(
+      tempVeraoNum.eq(0).or(tempInvernoNum.eq(0)), // Condição: se a temperatura de verão OU inverno for 0
+      0, // Se a condição for verdadeira, a amplitude é 0
+      tempVeraoNum.subtract(tempInvernoNum).abs() // Se a condição for falsa, calcula a amplitude normalmente
+    );
+
+    return feature
+      .set('media_verao', tempVeraoNum)
+      .set('media_inverno', tempInvernoNum)
+      .set('amplitude', amplitude);
+  });
+  
+  // Exporta o arquivo para a região atual
+  Export.table.toDrive({
+    collection: urbanoComTemperaturas,
+    description: 'TST_urbano_' + nomeRegiao,
+    folder: 'GEE_exports',
+    fileNamePrefix: 'TST_urbano_' + nomeRegiao,
+    fileFormat: 'GeoJSON'
+  });
+};
+
+// === 5. Obtém a lista de nomes de regiões e inicia as exportações ===
+var listaNomes = brRegioes.aggregate_array('NM_REGIA').getInfo();
+print('Nomes das Regiões para Exportação:', listaNomes);
+
+listaNomes.forEach(exportarPorNomeRegiao);
+
+// ---
+// ## Visualização no Mapa (Opcional)
+// ---
+Map.centerObject(brRegioes, 5);
+Map.addLayer(brRegioes.style({
+  color: 'black',
+  fillColor: '00000000',
+  width: 2
+}), {}, 'Regiões do Brasil');
+Map.addLayer(brUrbano.style({
+  color: 'blue',
+  fillColor: '00000000',
+  width: 1
+}), {}, 'Áreas Urbanas');
