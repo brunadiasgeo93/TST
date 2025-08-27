@@ -1,5 +1,5 @@
 // === 1. Sigla do Estado desejado ===  
-var siglaEstado = 'SE'; // Exemplo: 'SE' para Sergipe
+var siglaEstado = 'MA'; // Exemplo: 'SE' para Sergipe
 
 // === 2. Importar a malha de estados, municípios e setores censitários ===
 var estados = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_UF_2024');
@@ -27,11 +27,11 @@ var datasEstacoes = {
 var controleExportacao = {
   'Verao': {
     exportarTabela: false,
-    exportarRaster: false
+    exportarRaster: true
   },
   'Inverno': {
-    exportarTabela: true,
-    exportarRaster: false
+    exportarTabela: false,
+    exportarRaster: true
   }
 };
 
@@ -87,7 +87,7 @@ Object.keys(datasEstacoes).forEach(function(nomeEstacao){
   var mediaPorSetor = mediaTST.reduceRegions({
     collection: setoresEstado,
     reducer: ee.Reducer.mean(),
-    scale: 30
+    scale: 100
   }).map(function(feature) {
     return feature.set('Estacao', nomeEstacao);
   });
@@ -113,16 +113,19 @@ Object.keys(datasEstacoes).forEach(function(nomeEstacao){
   }
 
   if (exportarRaster) {
-    Export.image.toDrive({
-      image: mediaTST,
-      description: 'TST_Media_Setores_Raster_' + siglaEstado + '_' + nomeEstacao + '_' + anoInicio,
-      folder: 'GEE_exports',
-      fileNamePrefix: 'TST_Media_Setores_Raster_' + siglaEstado + '_' + nomeEstacao + '_' + anoInicio,
-      region: estado.geometry(),
-      scale: 30,
-      maxPixels: 1e13
-    });
-  }
+  var resolucao = '100m';
+  var nomeArquivo = 'TST_' + nomeEstacao + '_' + anoInicio + '_' + siglaEstado + '_' + resolucao;
+
+  Export.image.toDrive({
+    image: mediaTST,
+    description: nomeArquivo,
+    folder: 'GEE_exports',
+    fileNamePrefix: nomeArquivo,
+    region: estado.geometry(),
+    scale: 100, // Resolução de 100m
+    maxPixels: 1e13
+  });
+}
 
   // === 12. Debug ===
   colecao.size().evaluate(function(size){
