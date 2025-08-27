@@ -58,7 +58,7 @@ var visParams = {
 var nomesRegioes = ['Norte', 'Nordeste', 'Centro-oeste', 'Sudeste', 'Sul'];
 
 // === 8. Escolha da estação: 'inverno', 'verao' ou 'ambos' ===
-var estacaoSelecionada = 'inverno'; // Altere aqui conforme desejar
+var estacaoSelecionada = 'verao'; // Altere aqui conforme desejar
 
 // === NOVA FUNÇÃO: Dividir uma geometria em 4 quadrantes ===
 function dividirEmQuadrantes(geometria) {
