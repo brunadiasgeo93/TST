@@ -4,7 +4,7 @@ var exportarGeoJSON = true;  // Defina como true ou false
 
 // === 1. Definir nome do município e da UF ===
 var nomeMunicipio = 'Belém';
-var nomeUF = 'PA';  // Deixe como '' se não quiser filtrar ou incluir no nome do arquivo
+var nomeUF = '';  // Deixe como '' se não quiser filtrar ou incluir no nome do arquivo
 
 // === 2. Importar malhas de municípios e setores censitários ===
 var municipios = ee.FeatureCollection('projects/ee-brunadiasgeo/assets/BR_Municipios_2024');
